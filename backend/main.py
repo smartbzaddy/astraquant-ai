@@ -4,14 +4,38 @@ import httpx,numpy as np
 
 app=FastAPI(title="AstraQuant AI",version="2.0.1")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-URL="https://api.binance.com/api/v3/klines"
-
+COINGECKO_BASE="https://api.coingecko.com/api/v3/coins/{}"
+COIN_IDS={
+    "BTCUSDT":"bitcoin",
+    "BTC":"bitcoin",
+    "ETHUSDT":"ethereum",
+    "ETH":"ethereum",
+    "BNBUSDT":"binancecoin",
+    "BNB":"binancecoin",
+    "SOLUSDT":"solana",
+    "SOL":"solana",
+    "XRPUSDT":"ripple",
+    "XRP":"ripple",
+    "ADAUSDT":"cardano",
+    "ADA":"cardano",
+    "DOGEUSDT":"dogecoin",
+    "DOGE":"dogecoin",
+    "AVAXUSDT":"avalanche-2",
+    "AVAX":"avalanche-2",
+    "DOTUSDT":"polkadot",
+    "DOT":"polkadot",
+    "LINKUSDT":"chainlink",
+    "LINK":"chainlink"
+}
 async def data(symbol):
+    key=symbol.upper()
+    coin_id=COIN_IDS.get(key)
+    if not coin_id: raise HTTPException(400,"Unsupported symbol")
+    url=COINGECKO_BASE.format(coin_id)+"/market_chart"
     async with httpx.AsyncClient(timeout=15) as c:
-        r=await c.get(URL,params={"symbol":symbol.upper(),"interval":"1h","limit":200})
+        r=await c.get(url,params={"vs_currency":"usd","days":"30","interval":"hourly"})
         r.raise_for_status()
         return r.json()
-
 def ema(x,n):
     x=np.asarray(x,float); y=np.empty_like(x); y[0]=x[0]; a=2/(n+1)
     for i in range(1,len(x)): y[i]=a*x[i]+(1-a)*y[i-1]
@@ -34,7 +58,7 @@ def rsi(x,n=14):
     return z
 
 def indicators(rows):
-    c=np.array([float(x[4]) for x in rows])
+    c=np.array([float(x[1]) for x in rows["prices"]])
     e20,e50=ema(c,20),ema(c,50)
     m=ema(c,12)-ema(c,26); ms=ema(m,9); rm=rollmean(c,20); s=rollstd(c,20)
     ret=np.zeros(len(c)); ret[1:]=np.diff(c)/c[:-1]
