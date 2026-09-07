@@ -98,3 +98,82 @@ async def analysis(symbol:str):
         raise HTTPException(502,f"Market data provider returned HTTP {e.response.status_code}")
     except HTTPException: raise
     except Exception as e: raise HTTPException(500,f"Analysis failed: {e}")
+
+
+def backtest(c, lookahead=24, threshold=0.01):
+    c=np.asarray(c,float)
+    if len(c)<=lookahead:
+        return {"trades":0,"wins":0,"losses":0,"win_rate":0,"total_return":0}
+
+    wins=losses=0
+    total_return=0.0
+    trades=[]
+
+    for i in range(50,len(c)-lookahead):
+        e20=ema(c[:i+1],20)[-1]
+        e50=ema(c[:i+1],50)[-1]
+        rr=rsi(c[:i+1])[-1]
+        macd_line=(ema(c[:i+1],12)-ema(c[:i+1],26))[-1]
+        macd_signal=ema(ema(c[:i+1],12)-ema(c[:i+1],26),9)[-1]
+
+        score=0
+        if e20>e50: score+=1
+        else: score-=1
+        if rr<30: score+=1
+        elif rr>70: score-=1
+        if macd_line>macd_signal: score+=1
+        else: score-=1
+
+        if score>=2:
+            entry=c[i]
+            exit_price=c[i+lookahead]
+            result=(exit_price-entry)/entry
+            trades.append(result)
+        elif score<=-2:
+            entry=c[i]
+            exit_price=c[i+lookahead]
+            result=(entry-exit_price)/entry
+            trades.append(result)
+
+    for result in trades:
+        total_return += result
+        if result>threshold:
+            wins+=1
+        elif result<0:
+            losses+=1
+
+    count=len(trades)
+    return {
+        "trades":count,
+        "wins":wins,
+        "losses":losses,
+        "win_rate":round((wins/count)*100,2) if count else 0,
+        "total_return":round(total_return*100,2)
+    }
+
+
+@app.get("/api/backtest/{symbol}")
+async def run_backtest(symbol:str):
+    try:
+        rows=await data(symbol)
+        if not rows:
+            raise HTTPException(502,"No market data")
+
+        c=np.array([float(x[1]) for x in rows["prices"]])
+        result=backtest(c)
+
+        return {
+            "symbol":symbol.upper(),
+            "period":"30 days",
+            "lookahead_hours":24,
+            "strategy":"EMA20/EMA50 + RSI + MACD",
+            "backtest":result,
+            "disclaimer":"Historical backtest results do not guarantee future performance."
+        }
+
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502,f"Market data provider returned HTTP {e.response.status_code}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500,f"Backtest failed: {e}")
