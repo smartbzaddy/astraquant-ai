@@ -120,7 +120,6 @@ def indicators(rows):
 
     rm=rollmean(c,20)
     s=rollstd(c,20)
-
     ret=np.zeros(len(c))
     ret[1:]=np.diff(c)/c[:-1]
 
@@ -140,7 +139,7 @@ def val(x,d=0):
     x=float(x[-1])
     return x if np.isfinite(x) else d
 
-def backtest(c,lookahead=24,starting_capital=1000):
+def backtest(c,lookahead=24,starting_capital=1000,risk_per_trade=0.01,stop_loss=0.02,take_profit=0.04,max_drawdown_limit=0.25,fee_rate=0.001):
     c=np.asarray(c,float)
 
     if len(c)<=lookahead+50:
@@ -153,20 +152,28 @@ def backtest(c,lookahead=24,starting_capital=1000):
             "total_return":0,
             "max_drawdown":0,
             "starting_capital":starting_capital,
-            "final_capital":starting_capital
+            "final_capital":starting_capital,
+            "trading_halted":False
         }
 
     capital=float(starting_capital)
     peak=capital
     max_drawdown=0.0
-
     wins=0
     losses=0
     gross_profit=0.0
     gross_loss=0.0
     trades=[]
+    trading_halted=False
+    i=50
 
-    for i in range(50,len(c)-lookahead):
+    while i<len(c)-lookahead:
+        current_drawdown=(peak-capital)/peak if peak else 0
+
+        if current_drawdown>=max_drawdown_limit:
+            trading_halted=True
+            break
+
         history=c[:i+1]
 
         e20=ema(history,20)[-1]
@@ -199,12 +206,30 @@ def backtest(c,lookahead=24,starting_capital=1000):
         elif score<=-2:
             direction=-1
         else:
+            i+=1
             continue
 
         entry=c[i]
-        exit_price=c[i+lookahead]
+        exposure=min(1.0,risk_per_trade/stop_loss)
 
-        trade_return=direction*(exit_price-entry)/entry
+        exit_price=c[i+lookahead]
+        exit_index=i+lookahead
+
+        for j in range(i+1,i+lookahead+1):
+            move=direction*(c[j]-entry)/entry
+
+            if move<=-stop_loss:
+                exit_price=c[j]
+                exit_index=j
+                break
+
+            if move>=take_profit:
+                exit_price=c[j]
+                exit_index=j
+                break
+
+        raw_return=direction*(exit_price-entry)/entry
+        trade_return=exposure*raw_return-(2*fee_rate*exposure)
 
         capital*=1+trade_return
 
@@ -225,142 +250,32 @@ def backtest(c,lookahead=24,starting_capital=1000):
         if drawdown>max_drawdown:
             max_drawdown=drawdown
 
+        i=exit_index+1
+
     count=len(trades)
 
     if gross_loss>0:
         profit_factor=gross_profit/gross_loss
     else:
-        profit_factor=(
-            float("inf")
-            if gross_profit>0
-            else 0
-        )
+        profit_factor=float("inf") if gross_profit>0 else 0
 
     return {
         "trades":count,
         "wins":wins,
         "losses":losses,
-        "win_rate":round(
-            (wins/count)*100,2
-        ) if count else 0,
-        "profit_factor":round(
-            profit_factor,2
-        ) if np.isfinite(profit_factor) else "infinite",
-        "total_return":round(
-            ((capital/starting_capital)-1)*100,
-            2
-        ),
-        "max_drawdown":round(
-            max_drawdown*100,
-            2
-        ),
+        "win_rate":round((wins/count)*100,2) if count else 0,
+        "profit_factor":round(profit_factor,2) if np.isfinite(profit_factor) else "infinite",
+        "total_return":round(((capital/starting_capital)-1)*100,2),
+        "max_drawdown":round(max_drawdown*100,2),
         "starting_capital":starting_capital,
-        "final_capital":round(capital,2)
+        "final_capital":round(capital,2),
+        "risk_per_trade":risk_per_trade,
+        "stop_loss":stop_loss,
+        "take_profit":take_profit,
+        "max_drawdown_limit":max_drawdown_limit,
+        "fee_rate":fee_rate,
+        "trading_halted":trading_halted
     }
-
-@app.get("/")
-async def root():
-    return {
-        "app":"AstraQuant AI",
-        "version":"2.1.0",
-        "status":"online",
-        "message":"Live market-analysis and backtesting engine"
-    }
-
-@app.get("/health")
-async def health():
-    return {"status":"healthy"}
-
-@app.get("/api/analysis/{symbol}")
-async def analysis(symbol:str):
-    try:
-        rows=await data(symbol)
-
-        if not rows:
-            raise HTTPException(502,"No market data")
-
-        c,e20,e50,r,m,ms,bu,bl,v=indicators(rows)
-
-        price=val(c)
-        score=0
-        reasons=[]
-
-        if val(e20)>val(e50):
-            score+=1
-            reasons.append("EMA20 is above EMA50")
-        else:
-            score-=1
-            reasons.append("EMA20 is below EMA50")
-
-        if val(r,50)<30:
-            score+=1
-            reasons.append("RSI indicates oversold conditions")
-        elif val(r,50)>70:
-            score-=1
-            reasons.append("RSI indicates overbought conditions")
-
-        if val(m)>val(ms):
-            score+=1
-            reasons.append("MACD is bullish")
-        else:
-            score-=1
-            reasons.append("MACD is bearish")
-
-        if price>val(bu,price):
-            score-=1
-            reasons.append("Price is above the upper Bollinger Band")
-        elif price<val(bl,price):
-            score+=1
-            reasons.append("Price is below the lower Bollinger Band")
-
-        signal=(
-            "BUY"
-            if score>=2
-            else "SELL"
-            if score<=-2
-            else "HOLD"
-        )
-
-        return {
-            "symbol":symbol.upper(),
-            "price":round(price,8),
-            "signal":signal,
-            "confidence":round(
-                min(.95,.5+abs(score)*.1),
-                3
-            ),
-            "indicators":{
-                "rsi":round(val(r,50),2),
-                "ema20":round(val(e20),8),
-                "ema50":round(val(e50),8),
-                "macd":round(val(m),8),
-                "macd_signal":round(val(ms),8),
-                "bollinger_upper":round(
-                    val(bu,price),8
-                ),
-                "bollinger_lower":round(
-                    val(bl,price),8
-                ),
-                "volatility":round(
-                    val(v),6
-                )
-            },
-            "reasons":reasons,
-            "disclaimer":"Probabilistic market analysis, not financial advice or a guarantee of future performance."
-        }
-
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            502,
-            f"Market data provider returned HTTP {e.response.status_code}"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            500,
-            f"Analysis failed: {e}"
-        )
 
 @app.get("/api/backtest/{symbol}")
 async def run_backtest(symbol:str):
@@ -370,30 +285,23 @@ async def run_backtest(symbol:str):
         if not rows:
             raise HTTPException(502,"No market data")
 
-        c=np.array(
-            [float(x[1]) for x in rows["prices"]]
-        )
-
+        c=np.array([float(x[1]) for x in rows["prices"]])
         result=backtest(c)
 
         return {
             "symbol":symbol.upper(),
             "period":"30 days",
             "lookahead_hours":24,
-            "strategy":"EMA20/EMA50 + RSI + MACD",
+            "strategy":"EMA20/EMA50 + RSI + MACD with risk management",
             "backtest":result,
             "disclaimer":"Historical backtest results do not guarantee future performance."
         }
 
     except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            502,
-            f"Market data provider returned HTTP {e.response.status_code}"
-        )
+        raise HTTPException(502,f"Market data provider returned HTTP {e.response.status_code}")
+
     except HTTPException:
         raise
+
     except Exception as e:
-        raise HTTPException(
-            500,
-            f"Backtest failed: {e}"
-        )
+        raise HTTPException(500,f"Backtest failed: {e}")
