@@ -1,0 +1,1 @@
+{"scripts":{"dev":"vite --host 0.0.0.0","build":"vite build","preview":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"^4.3.4","react":"latest","react-dom":"latest","recharts":"latest","vite":"^6.1.0"}}

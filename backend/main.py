@@ -255,6 +255,12 @@ def backtest(c,lookahead=24,starting_capital=1000):
             2
         ),
         "starting_capital":starting_capital,
+        "avg_trade":round(sum(trades)/len(trades)*100,2) if trades else 0,
+        "best_trade":round(max(trades)*100,2) if trades else 0,
+        "worst_trade":round(min(trades)*100,2) if trades else 0,
+        "avg_winning_trade":round(sum(t for t in trades if t>0)/len([t for t in trades if t>0])*100,2) if any(t>0 for t in trades) else 0,
+
+
         "final_capital":round(capital,2)
     }
 
@@ -397,3 +403,15 @@ async def run_backtest(symbol:str):
             500,
             f"Backtest failed: {e}"
         )
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+@app.get("/dashboard")
+async def dashboard():
+    return FileResponse(FRONTEND_DIST / "index.html")
